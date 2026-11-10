@@ -1,0 +1,79 @@
+name: Build and deploy registry
+
+# The registry is rebuilt from scratch on every run from the .crate files in
+# `crates/`, then deployed to GitHub Pages. The `crates/` directory is the
+# single source of truth: add a file to publish, delete it to unpublish.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - ".github/workflows/registry.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+env:
+  MARGO_VERSION: "0.1.7"
+  REGISTRY_NAME: "bodul"
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Configure Pages
+        id: pages
+        uses: actions/configure-pages@v5
+
+      - name: Install margo
+        run: |
+          mkdir -p "$RUNNER_TEMP/margo"
+          curl -fsSL "https://github.com/integer32llc/margo/releases/download/${MARGO_VERSION}/margo-linux-x86_64.tar.gz" \
+            | tar -xz -C "$RUNNER_TEMP/margo"
+          echo "$RUNNER_TEMP/margo" >> "$GITHUB_PATH"
+
+      - name: Build registry
+        env:
+          BASE_URL: ${{ steps.pages.outputs.base_url }}
+        run: |
+          margo --version || true
+          margo init _site \
+            --base-url "${BASE_URL}/" \
+            --auth-required false \
+            --html true \
+            --html-suggested-registry-name "$REGISTRY_NAME" \
+            --defaults
+
+          shopt -s nullglob
+          for crate in crates/*.crate; do
+            echo "Adding $crate"
+            margo add --registry _site "$crate"
+          done
+
+          margo list --registry _site
+          touch _site/.nojekyll
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
